@@ -7,14 +7,17 @@
     <title>Call Users</title>
 </head>
 <body>
-    {{ request.user.username }}
+    <h1>Welcome, {{ request.user.username }}</h1>
+    
     <h2>Available Users</h2>
     <ul id="user-list">
         {% for user in users %}
-            <li>
-                {{ user.username }}
-                <button onclick="callUser({{ user.id }}, '{{ user.username }}')">Call</button>
-            </li>
+            {% if user.id != request.user.id %}  <!-- Prevent calling self -->
+                <li>
+                    {{ user.username }}
+                    <button onclick="callUser({{ user.id }}, '{{ user.username }}')">Call</button>
+                </li>
+            {% endif %}
         {% endfor %}
     </ul>
 
@@ -28,7 +31,7 @@
     <script>
         const userId = "{{ request.user.id }}";
         const username = "{{ request.user.username }}";
-        const socket = new WebSocket("ws://" + window.location.host + "/ws/call/");
+        const socket = new WebSocket("wss://43b1-2a09-bac1-74e0-00-2d-cd.ngrok-free.app/ws/call/");
     
         let peerConnection;
         let localStream;
@@ -47,7 +50,7 @@
                 document.getElementById("reject-call").style.display = "inline";
                 window.callerId = data.caller_id;
             } else if (data.action === "call_accepted") {
-                startWebRTC(true);  // Caller starts WebRTC
+                startWebRTC(true);
             } else if (data.action === "call_rejected") {
                 alert("Call rejected.");
             } else if (data.action === "offer") {
@@ -61,24 +64,38 @@
     
         async function callUser(targetUserId, targetUsername) {
             try {
+                // Request microphone access
                 localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+                // Proceed with calling logic
                 socket.send(JSON.stringify({
                     action: "call",
                     target_user: targetUserId
                 }));
                 alert(`Calling ${targetUsername}...`);
             } catch (error) {
-                console.error("Error accessing microphone: ", error);
-                alert("Microphone access is required to make a call.");
+                console.error("Microphone access error:", error.name, error.message);
+                
+                if (error.name === "NotAllowedError") {
+                    alert("Microphone access was denied. Please allow microphone access in browser settings.");
+                } else if (error.name === "NotFoundError") {
+                    alert("No microphone was found. Please connect a microphone and try again.");
+                } else if (error.name === "NotReadableError") {
+                    alert("Microphone is currently in use by another application.");
+                } else {
+                    alert("An unexpected error occurred while accessing the microphone. Check console logs for details.");
+                }
             }
         }
+        
+        
     
         function acceptCall() {
             socket.send(JSON.stringify({
                 action: "accept",
                 caller_id: window.callerId
             }));
-            startWebRTC(false);  // Callee starts WebRTC
+            startWebRTC(false);
         }
     
         function rejectCall() {

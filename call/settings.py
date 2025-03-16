@@ -97,7 +97,7 @@ CACHES = {
 
 # WebSocket Allowed Hosts
 CORS_ALLOWED_ORIGINS = [
-    "http://127.0.0.1:3000",  # Frontend (React, Vue, etc.)
+    "http://127.0.0.1:8000",  # Frontend (React, Vue, etc.)
 ]
 
 # Enable WebSockets
