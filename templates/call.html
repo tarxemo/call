@@ -1,0 +1,149 @@
+{% load static %}
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Call Users</title>
+</head>
+<body>
+    {{ request.user.username }}
+    <h2>Available Users</h2>
+    <ul id="user-list">
+        {% for user in users %}
+            <li>
+                {{ user.username }}
+                <button onclick="callUser({{ user.id }}, '{{ user.username }}')">Call</button>
+            </li>
+        {% endfor %}
+    </ul>
+
+    <h3 id="incoming-call" style="display: none;"></h3>
+    <button id="accept-call" style="display: none;" onclick="acceptCall()">Accept</button>
+    <button id="reject-call" style="display: none;" onclick="rejectCall()">Reject</button>
+
+    <h2>Voice Call</h2>
+    <audio id="remoteAudio" autoplay></audio>
+
+    <script>
+        const userId = "{{ request.user.id }}";
+        const username = "{{ request.user.username }}";
+        const socket = new WebSocket("ws://" + window.location.host + "/ws/call/");
+    
+        let peerConnection;
+        let localStream;
+    
+        const configuration = {
+            iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+        };
+    
+        socket.onmessage = function(event) {
+            const data = JSON.parse(event.data);
+    
+            if (data.action === "incoming_call") {
+                document.getElementById("incoming-call").textContent = `Incoming call from ${data.caller_name}`;
+                document.getElementById("incoming-call").style.display = "block";
+                document.getElementById("accept-call").style.display = "inline";
+                document.getElementById("reject-call").style.display = "inline";
+                window.callerId = data.caller_id;
+            } else if (data.action === "call_accepted") {
+                startWebRTC(true);  // Caller starts WebRTC
+            } else if (data.action === "call_rejected") {
+                alert("Call rejected.");
+            } else if (data.action === "offer") {
+                handleOffer(data.offer);
+            } else if (data.action === "answer") {
+                handleAnswer(data.answer);
+            } else if (data.action === "ice_candidate") {
+                handleNewICECandidate(data.candidate);
+            }
+        };
+    
+        async function callUser(targetUserId, targetUsername) {
+            try {
+                localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                socket.send(JSON.stringify({
+                    action: "call",
+                    target_user: targetUserId
+                }));
+                alert(`Calling ${targetUsername}...`);
+            } catch (error) {
+                console.error("Error accessing microphone: ", error);
+                alert("Microphone access is required to make a call.");
+            }
+        }
+    
+        function acceptCall() {
+            socket.send(JSON.stringify({
+                action: "accept",
+                caller_id: window.callerId
+            }));
+            startWebRTC(false);  // Callee starts WebRTC
+        }
+    
+        function rejectCall() {
+            socket.send(JSON.stringify({
+                action: "reject",
+                caller_id: window.callerId
+            }));
+        }
+    
+        async function startWebRTC(isCaller) {
+            try {
+                if (!localStream) {
+                    localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                }
+                peerConnection = new RTCPeerConnection(configuration);
+                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
+    
+                peerConnection.onicecandidate = event => {
+                    if (event.candidate) {
+                        socket.send(JSON.stringify({
+                            action: "ice_candidate",
+                            candidate: event.candidate
+                        }));
+                    }
+                };
+    
+                peerConnection.ontrack = event => {
+                    document.getElementById("remoteAudio").srcObject = event.streams[0];
+                };
+    
+                if (isCaller) {
+                    const offer = await peerConnection.createOffer();
+                    await peerConnection.setLocalDescription(offer);
+                    socket.send(JSON.stringify({
+                        action: "offer",
+                        offer: offer
+                    }));
+                }
+            } catch (error) {
+                console.error("Error starting WebRTC: ", error);
+            }
+        }
+    
+        async function handleOffer(offer) {
+            if (!peerConnection) await startWebRTC(false);
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
+            const answer = await peerConnection.createAnswer();
+            await peerConnection.setLocalDescription(answer);
+            socket.send(JSON.stringify({
+                action: "answer",
+                answer: answer
+            }));
+        }
+    
+        async function handleAnswer(answer) {
+            await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
+        }
+    
+        async function handleNewICECandidate(candidate) {
+            try {
+                await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
+            } catch (error) {
+                console.error("Error adding ICE candidate: ", error);
+            }
+        }
+    </script>
+</body>
+</html>
