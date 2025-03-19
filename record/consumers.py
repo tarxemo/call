@@ -5,23 +5,29 @@ class CallConsumer(AsyncWebsocketConsumer):
     async def connect(self):
         self.user = self.scope["user"]
         self.room_group_name = f"user_{self.user.id}"
-        
+
+        # Join the user's group
         await self.channel_layer.group_add(
             self.room_group_name,
             self.channel_name
         )
         await self.accept()
+        print(f"User {self.user.username} connected")
 
     async def disconnect(self, close_code):
+        # Leave the user's group
         await self.channel_layer.group_discard(
             self.room_group_name,
             self.channel_name
         )
+        print(f"User {self.user.username} disconnected")
 
     async def receive(self, text_data):
         data = json.loads(text_data)
         action = data.get("action")
+        print(f"Received action: {action} from user {self.user.username}")
 
+        # Handle different actions
         if action == "call":
             await self.initiate_call(data)
         elif action == "accept":
@@ -29,14 +35,21 @@ class CallConsumer(AsyncWebsocketConsumer):
         elif action == "reject":
             await self.reject_call(data)
         elif action == "offer":
+            print(f"Forwarding offer to user {data.get('target_user')}")
             await self.forward_signal(data, "offer")
         elif action == "answer":
+            print(f"Forwarding answer to user {data.get('caller_id')}")
             await self.forward_signal(data, "answer")
         elif action == "ice_candidate":
+            print(f"Forwarding ICE candidate to user {data.get('target_user')}")
             await self.forward_signal(data, "ice_candidate")
+        else:
+            print(f"Unknown action: {action}")
 
     async def initiate_call(self, data):
         target_user_id = data["target_user"]
+        print(f"User {self.user.username} is calling user {target_user_id}")
+
         await self.channel_layer.group_send(
             f"user_{target_user_id}",
             {
@@ -55,6 +68,8 @@ class CallConsumer(AsyncWebsocketConsumer):
 
     async def accept_call(self, data):
         caller_id = data["caller_id"]
+        print(f"User {self.user.username} accepted call from {caller_id}")
+
         await self.channel_layer.group_send(
             f"user_{caller_id}",
             {
@@ -73,6 +88,8 @@ class CallConsumer(AsyncWebsocketConsumer):
 
     async def reject_call(self, data):
         caller_id = data["caller_id"]
+        print(f"User {self.user.username} rejected call from {caller_id}")
+
         await self.channel_layer.group_send(
             f"user_{caller_id}",
             {
@@ -87,6 +104,8 @@ class CallConsumer(AsyncWebsocketConsumer):
 
     async def forward_signal(self, data, action):
         target_id = data.get("target_user") or data.get("caller_id")
+        print(f"Forwarding {action} to user {target_id}")
+
         await self.channel_layer.group_send(
             f"user_{target_id}",
             {"type": action, **data}

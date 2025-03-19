@@ -31,134 +31,197 @@
     <script>
         const userId = "{{ request.user.id }}";
         const username = "{{ request.user.username }}";
-        const socket = new WebSocket("wss://43b1-2a09-bac1-74e0-00-2d-cd.ngrok-free.app/ws/call/");
-    
+        const socket = new WebSocket((window.location.protocol === "https:" ? "wss://" : "ws://") + window.location.host + "/ws/call/");
         let peerConnection;
         let localStream;
-    
+
         const configuration = {
-            iceServers: [{ urls: "stun:stun.l.google.com:19302" }]
+            iceServers: [
+                { urls: "stun:stun.l.google.com:19302" }, // Google's public STUN server
+                // Add TURN server here if needed (e.g., for restrictive networks)
+            ]
         };
-    
+
+        // WebSocket message handler
         socket.onmessage = function(event) {
             const data = JSON.parse(event.data);
-    
-            if (data.action === "incoming_call") {
-                document.getElementById("incoming-call").textContent = `Incoming call from ${data.caller_name}`;
-                document.getElementById("incoming-call").style.display = "block";
-                document.getElementById("accept-call").style.display = "inline";
-                document.getElementById("reject-call").style.display = "inline";
-                window.callerId = data.caller_id;
-            } else if (data.action === "call_accepted") {
-                startWebRTC(true);
-            } else if (data.action === "call_rejected") {
-                alert("Call rejected.");
-            } else if (data.action === "offer") {
-                handleOffer(data.offer);
-            } else if (data.action === "answer") {
-                handleAnswer(data.answer);
-            } else if (data.action === "ice_candidate") {
-                handleNewICECandidate(data.candidate);
+            console.log("WebSocket message received:", data);
+
+            switch (data.action) {
+                case "incoming_call":
+                    document.getElementById("incoming-call").textContent = `Incoming call from ${data.caller_name}`;
+                    document.getElementById("incoming-call").style.display = "block";
+                    document.getElementById("accept-call").style.display = "inline";
+                    document.getElementById("reject-call").style.display = "inline";
+                    window.callerId = data.caller_id;
+                    break;
+
+                case "call_accepted":
+                    startWebRTC(true); // Start WebRTC as the caller
+                    break;
+
+                case "call_rejected":
+                    alert("Call rejected.");
+                    break;
+
+                case "offer":
+                    handleOffer(data.offer);
+                    break;
+
+                case "answer":
+                    handleAnswer(data.answer);
+                    break;
+
+                case "ice_candidate":
+                    handleNewICECandidate(data.candidate);
+                    break;
+
+                default:
+                    console.warn("Unknown action:", data.action);
             }
         };
-    
+
+        // Call a user
         async function callUser(targetUserId, targetUsername) {
             try {
                 // Request microphone access
                 localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-        
-                // Proceed with calling logic
+                console.log("Microphone access granted");
+
+                // Initialize WebRTC
+                peerConnection = new RTCPeerConnection(configuration);
+
+                // Add local stream tracks to the peer connection
+                localStream.getTracks().forEach(track => {
+                    console.log("Adding local track:", track);
+                    peerConnection.addTrack(track, localStream);
+                });
+
+                // Set up ICE candidate handler
+                peerConnection.onicecandidate = event => {
+                    if (event.candidate) {
+                        console.log("New ICE candidate:", event.candidate);
+                        socket.send(JSON.stringify({
+                            action: "ice_candidate",
+                            candidate: event.candidate,
+                            target_user: targetUserId // Ensure target_user is set
+                        }));
+                    } else {
+                        console.log("ICE candidate gathering complete");
+                    }
+                };
+
+                // Handle remote stream
+                peerConnection.ontrack = event => {
+                    console.log("Remote stream received:", event.streams[0]);
+                    const remoteAudio = document.getElementById("remoteAudio");
+                    remoteAudio.srcObject = event.streams[0];
+                    remoteAudio.play().catch(error => {
+                        console.error("Error playing remote audio:", error);
+                    });
+                };
+
+                // Send call request
                 socket.send(JSON.stringify({
                     action: "call",
                     target_user: targetUserId
                 }));
                 alert(`Calling ${targetUsername}...`);
             } catch (error) {
-                console.error("Microphone access error:", error.name, error.message);
-                
-                if (error.name === "NotAllowedError") {
-                    alert("Microphone access was denied. Please allow microphone access in browser settings.");
-                } else if (error.name === "NotFoundError") {
-                    alert("No microphone was found. Please connect a microphone and try again.");
-                } else if (error.name === "NotReadableError") {
-                    alert("Microphone is currently in use by another application.");
-                } else {
-                    alert("An unexpected error occurred while accessing the microphone. Check console logs for details.");
-                }
+                console.error("Microphone access error:", error);
+                alert(`Error accessing microphone: ${error.message}`);
             }
         }
-        
-        
-    
+
+        // Accept an incoming call
         function acceptCall() {
             socket.send(JSON.stringify({
                 action: "accept",
                 caller_id: window.callerId
             }));
-            startWebRTC(false);
+            startWebRTC(false); // Start WebRTC as the callee
         }
-    
+
+        // Reject an incoming call
         function rejectCall() {
             socket.send(JSON.stringify({
                 action: "reject",
                 caller_id: window.callerId
             }));
         }
-    
+
+        // Start WebRTC connection
         async function startWebRTC(isCaller) {
             try {
                 if (!localStream) {
                     localStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+                    console.log("Local stream created:", localStream);
                 }
-                peerConnection = new RTCPeerConnection(configuration);
-                localStream.getTracks().forEach(track => peerConnection.addTrack(track, localStream));
-    
-                peerConnection.onicecandidate = event => {
-                    if (event.candidate) {
-                        socket.send(JSON.stringify({
-                            action: "ice_candidate",
-                            candidate: event.candidate
-                        }));
-                    }
+
+                if (!isCaller) {
+                    // Add local stream tracks to the peer connection (callee)
+                    localStream.getTracks().forEach(track => {
+                        console.log("Adding local track (callee):", track);
+                        peerConnection.addTrack(track, localStream);
+                    });
+                }
+
+                // Log connection state changes
+                peerConnection.onconnectionstatechange = () => {
+                    console.log("Connection state:", peerConnection.connectionState);
                 };
-    
-                peerConnection.ontrack = event => {
-                    document.getElementById("remoteAudio").srcObject = event.streams[0];
+
+                // Log ICE connection state changes
+                peerConnection.oniceconnectionstatechange = () => {
+                    console.log("ICE connection state:", peerConnection.iceConnectionState);
                 };
-    
+
                 if (isCaller) {
+                    // Create and send an offer
                     const offer = await peerConnection.createOffer();
                     await peerConnection.setLocalDescription(offer);
+                    console.log("Sending offer:", offer);
                     socket.send(JSON.stringify({
                         action: "offer",
-                        offer: offer
+                        offer: offer,
+                        target_user: window.callerId // Ensure target_user is set
                     }));
                 }
             } catch (error) {
-                console.error("Error starting WebRTC: ", error);
+                console.error("Error starting WebRTC:", error);
             }
         }
-    
+
+        // Handle incoming offer
         async function handleOffer(offer) {
-            if (!peerConnection) await startWebRTC(false);
+            console.log("Received offer:", offer);
+            if (!peerConnection) {
+                await startWebRTC(false); // Initialize WebRTC as the callee
+            }
             await peerConnection.setRemoteDescription(new RTCSessionDescription(offer));
             const answer = await peerConnection.createAnswer();
             await peerConnection.setLocalDescription(answer);
+            console.log("Sending answer:", answer);
             socket.send(JSON.stringify({
                 action: "answer",
-                answer: answer
+                answer: answer,
+                target_user: window.callerId // Ensure target_user is set
             }));
         }
-    
+
+        // Handle incoming answer
         async function handleAnswer(answer) {
+            console.log("Received answer:", answer);
             await peerConnection.setRemoteDescription(new RTCSessionDescription(answer));
         }
-    
+
+        // Handle incoming ICE candidate
         async function handleNewICECandidate(candidate) {
             try {
+                console.log("Adding ICE candidate:", candidate);
                 await peerConnection.addIceCandidate(new RTCIceCandidate(candidate));
             } catch (error) {
-                console.error("Error adding ICE candidate: ", error);
+                console.error("Error adding ICE candidate:", error);
             }
         }
     </script>
